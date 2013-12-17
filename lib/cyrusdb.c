@@ -75,6 +75,9 @@ struct cyrusdb_backend *cyrusdb_backends[] = {
 #if defined HAVE_MYSQL || defined HAVE_PGSQL || defined HAVE_SQLITE
     &cyrusdb_sql,
 #endif
+#ifdef HAVE_HBASE
+    &cyrusdb_hbase,
+#endif
     NULL };
 
 void cyrusdb_init() 

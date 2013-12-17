@@ -165,6 +165,7 @@ AC_STRUCT_TM
 AC_STRUCT_TIMEZONE
 
 AC_SUBST(CPPFLAGS)
+AC_SUBST(CXXFLAGS)
 AC_SUBST(PRE_SUBDIRS)
 AC_SUBST(EXTRA_SUBDIRS)
 AC_SUBST(DEPLIBS)
@@ -369,6 +370,65 @@ if test $HAVE_SQL = 1; then
 fi
 
 dnl End SQL DB Detection
+
+dnl HBase Thrift Detection
+AC_ARG_WITH(hbase, [  --with-hbase=DIR          use HBase Thrift API (in DIR) [[no]] ],
+	with_hbase=$withval, with_hbase="yes")
+
+case "$with_hbase" in
+  no)
+	use_hbase="no"
+	;;
+  yes)
+	use_hbase="yes"
+	with_hbase_lib=none
+	with_hbase_inc=none
+	;;
+
+  *)
+	use_hbase="yes"
+	with_hbase_lib="$with_hbase/lib"
+	with_hbase_inc="$with_hbase/include"
+	;;
+esac
+
+if test "$use_hbase" != "no"; then
+  if test "$with_hbase_lib" != "none"; then
+    CMU_ADD_LIBPATH($with_hbase_lib)
+  fi
+
+  # Check whether --with-hbase-libdir was given.
+  if test "${with_hbase_libdir+set}" = set; then :
+    withval=$with_hbase_libdir; with_hbase_lib=$withval
+  else
+     test "${with_hbase_lib+set}" = set || with_hbase_lib=none
+  fi
+
+
+  # Check whether --with-hbase-incdir was given.
+  if test "${with_hbase_incdir+set}" = set; then :
+    withval=$with_hbase_incdir; with_hbase_inc=$withval
+  else
+     test "${with_hbase_inc+set}" = set || with_hbase_inc=none
+  fi
+
+  if test -d $with_hbase_inc; then
+    CPPFLAGS="$CPPFLAGS -I$with_hbase_inc"
+  fi
+
+  if test -d $with_hbase_lib; then
+    LDFLAGS="-L$with_hbase_lib ${LDFLAGS}"
+  fi
+
+  CPPFLAGS="$CPPFLAGS"
+  CXXFLAGS="$CFLAGS -fpic"
+  LDFLAGS="$LDFLAGS -lstdc++ -lthrift"
+
+  CYRUSDB_OBJS="$CYRUSDB_OBJS cyrusdb_hbase.o cyrusdb_hbase_thrift.o"
+  AC_DEFINE(HAVE_HBASE,[],[Build in HBase Thrift API support?])
+fi
+
+dnl End HBase Thrift Detection
 
 AC_SUBST(CYRUSDB_OBJS)
 

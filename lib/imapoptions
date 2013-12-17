@@ -388,6 +388,9 @@ Blank lines and lines beginning with ``#'' are ignored.
    hashing done on configuration directories.  This is recommended if
    one partition has a very bushy mailbox tree. */
 
+{ "hbase_hostnames", "", STRING }
+/* Comma separated list of HBase Thrift servers (in host[:port] format). */
+
 # Commented out - there's no such thing as "hostname_mechs", but we need
 # this for the man page
 # { "hostname_mechs", NULL, STRING }
@@ -678,7 +681,7 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "mboxkey_db", "skiplist", STRINGLIST("berkeley", "skiplist") }
 /* The cyrusdb backend to use for mailbox keys. */
 
-{ "mboxlist_db", "skiplist", STRINGLIST("flat", "berkeley", "berkeley-hash", "skiplist")}
+{ "mboxlist_db", "skiplist", STRINGLIST("flat", "berkeley", "berkeley-hash", "skiplist", "hbase")}
 /* The cyrusdb backend to use for the mailbox list. */
 
 { "mboxlist_db_path", NULL, STRING }
