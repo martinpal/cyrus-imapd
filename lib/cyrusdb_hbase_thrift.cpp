@@ -1,15 +1,127 @@
+#include <syslog.h>
+
 #include <iostream>
+#include <string>
 
 #include <boost/lexical_cast.hpp>
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/transport/TSocket.h>
 #include <thrift/transport/TTransportUtils.h>
 
+#include "Hbase.h"
+
+using namespace apache::thrift;
+using namespace apache::thrift::protocol;
+using namespace apache::thrift::transport;
+
+using namespace apache::hadoop::hbase::thrift;
+
 extern "C" {
-  void test_c();
+    int hbase_init(const char *hostnames);
+    int hbase_done();
+    int hbase_open(const char *hostnames);
 }
 
-void test_c()
+static int dbinit = 0;
+static struct hbase_engine {
+    boost::shared_ptr<TSocket>                socket;
+    boost::shared_ptr<TTransport>         transport;
+    boost::shared_ptr<TProtocol>            protocol;
+    boost::shared_ptr<HbaseClient>        client;
+} dbengine;
+
+typedef std::vector<std::string> StrVec;
+typedef std::vector<ColumnDescriptor> ColVec;
+
+std::string fname_to_tablename(const std::string &fname)
 {
-  std::cout << "C++" << std::endl;
+    return fname.substr(fname.rfind('/')+1);
+}
+
+int hbase_init(const char *hostnames)
+{
+    syslog(LOG_DEBUG, "%s %s", __func__, hostnames);
+    if (dbinit++) return 0;
+
+    // TODO only one hostname, extend for more hostnames later
+    std::string hostname(hostnames);
+    int port = 9090;
+    if ( hostname.find(":") != std::string::npos ) {
+        port = boost::lexical_cast<int>(hostname.substr(hostname.find(":")+1));
+        hostname.resize(hostname.find(":"));
+    }
+    syslog(LOG_DEBUG, "HBase: Connecting to %s:%d", hostname.c_str(), port);
+
+    bool isFramed = false;
+    dbengine.socket.reset(new TSocket(hostname, port));
+
+    if (isFramed) {
+        dbengine.transport.reset(new TFramedTransport(dbengine.socket));
+    } else {
+        dbengine.transport.reset(new TBufferedTransport(dbengine.socket));
+    }
+    dbengine.protocol.reset(new TBinaryProtocol(dbengine.transport));
+    dbengine.client.reset(new HbaseClient(dbengine.protocol));
+
+    try {
+        dbengine.transport->open();
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return 1;
+    }
+    return 0;
+}
+
+int hbase_done()
+{
+    syslog(LOG_DEBUG, "%s", __func__);
+    if (--dbinit) return 0;
+    dbengine.client.reset();
+    dbengine.protocol.reset();
+    dbengine.transport->close();
+    dbengine.transport.reset();
+    dbengine.socket.reset();
+    return 0;
+}
+
+int hbase_open(const char *in_fname)
+{
+    syslog(LOG_DEBUG, "%s %s", __func__, in_fname);
+    // Scan all tables, look for the demo table and delete it.
+    std::string fname(in_fname);
+    fname = fname_to_tablename(fname);
+    bool found = false;
+    syslog(LOG_DEBUG, "HBase: Scanning tables...");
+    StrVec tables;
+    try {
+        dbengine.client->getTableNames(tables);
+        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
+            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
+            if (fname == *it) {
+                found = true;
+                break;
+            }
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return 1;
+    }
+    syslog(LOG_DEBUG, "HBase: ... done scanning tables");
+    if (found) return 0;
+    // Create the demo table with one column family (entry:)
+    ColVec columns;
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = "entry:";
+    columns.back().maxVersions = 1;
+
+    syslog(LOG_DEBUG, "HBase: Creating table %s", fname.c_str());
+    try {
+        dbengine.client->createTable(fname, columns);
+    } catch (const AlreadyExists &ae) {
+        syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return 1;
+    }
+    return 0;
 }

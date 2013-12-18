@@ -116,6 +116,8 @@ enum cyrus_opt {
     CYRUSOPT_SQL_USESSL,
     /* Checkpoint after every recovery (OFF) */
     CYRUSOPT_SKIPLIST_ALWAYS_CHECKPOINT,
+		/* Hostnames of HBase Thrift servers ("") */
+		CYRUSOPT_HBASE_HOSTNAMES,
 
     CYRUSOPT_LAST
     
