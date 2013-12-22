@@ -109,7 +109,7 @@ static int foreach(struct db *db,
            struct txn **mytid)
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_foreach(db->fname, prefix, prefixlen, goodp, cb, rock);
 }
 
 static int create(struct db *db,

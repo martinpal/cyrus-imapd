@@ -23,6 +23,15 @@ enum cyrusdb_ret {
     CYRUSDB_NOTFOUND = -5
 };
 
+typedef int foreach_p(void *rock,
+              const char *key, int keylen,
+              const char *data, int datalen);
+
+typedef int foreach_cb(void *rock,
+               const char *key, int keylen,
+               const char *data, int datalen);
+// end cyrusdb.h
+
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
@@ -36,6 +45,10 @@ extern "C" {
     int hbase_fetch(const char *in_fname,
                     const char *in_key, int keylen,
                     const char **out_data, int *datalen);
+    int hbase_foreach(const char *in_fname,
+                      char *in_prefix, int prefixlen,
+                      foreach_p *goodp,
+                      foreach_cb *cb, void *rock);
     int hbase_store(const char *in_fname,
                     const char *in_key, int keylen,
                     const char *in_data, int datalen);
@@ -171,6 +184,46 @@ int hbase_fetch(const char *in_fname,
         return CYRUSDB_INTERNAL;
     }
     return CYRUSDB_OK;
+}
+
+int hbase_foreach(const char *in_fname,
+                  char *in_prefix, int prefixlen,
+                  foreach_p *goodp,
+                  foreach_cb *cb, void *rock)
+{
+    syslog(LOG_DEBUG, "%s %s", __func__, in_fname);
+    std::string fname(in_fname);
+    fname = fname_to_tablename(fname);
+    std::string prefix(in_prefix, prefixlen);
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    StrVec columnNames;
+    columnNames.push_back("entry:");
+    try {
+        int scanner = dbengine.client->scannerOpenWithPrefix(fname, prefix, columnNames, dummyAttributes);
+        while (true) {
+            std::vector<TRowResult> rowResult;
+            dbengine.client->scannerGet(rowResult, scanner);
+            if (rowResult.size() == 0)
+                break;
+            std::string &key = rowResult[0].row;
+            std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+            syslog(LOG_DEBUG, "entry %s %s", key.c_str(), value.c_str());
+            if (!goodp || goodp(rock, key.data(), key.size(), value.data(), value.size())) {
+                int r = cb(rock, key.data(), key.size(), value.data(), value.size());
+                if (r != 0) {
+                    if (r < 0) {
+                        syslog(LOG_ERR, "DBERROR: foreach cb() failed");
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return CYRUSDB_INTERNAL;
+    }
+    return 0;
 }
 
 int hbase_store(const char *in_fname,
