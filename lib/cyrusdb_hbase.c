@@ -84,13 +84,13 @@ static int myclose(struct db *db)
     return 0;
 }
 
-static int fetch(struct db *mydb,
+static int fetch(struct db *db,
          const char *key, int keylen,
          const char **data, int *datalen,
          struct txn **mytid)
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_fetch(db->fname, key, keylen, data, datalen);
 }
 
 static int fetchlock(struct db *db,
@@ -99,7 +99,7 @@ static int fetchlock(struct db *db,
              struct txn **mytid)
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_fetch(db->fname, key, keylen, data, datalen);
 }
 
 static int foreach(struct db *db,
@@ -118,7 +118,7 @@ static int create(struct db *db,
           struct txn **tid)
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_store(db->fname, key, keylen, data, datalen);
 }
 
 static int store(struct db *db,
@@ -127,7 +127,7 @@ static int store(struct db *db,
          struct txn **tid)
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_store(db->fname, key, keylen, data, datalen);
 }
 
 static int delete(struct db *db,
@@ -135,7 +135,7 @@ static int delete(struct db *db,
           struct txn **mytid, int force __attribute__((unused)))
 {
     syslog(LOG_DEBUG, "%s", __func__);
-    return 0;
+    return hbase_store(db->fname, key, keylen, NULL, NULL);
 }
 
 static int commit_txn(struct db *db, struct txn *tid)

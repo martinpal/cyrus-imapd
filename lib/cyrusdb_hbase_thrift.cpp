@@ -10,6 +10,19 @@
 
 #include "Hbase.h"
 
+// FIXME
+// cyrusdb.h cannot be included into C++ source unless sanitized (using 'delete' as variable name)
+// therefore pasting the part we need here
+enum cyrusdb_ret {
+    CYRUSDB_OK = 0,
+    CYRUSDB_DONE = 1,
+    CYRUSDB_IOERROR = -1,
+    CYRUSDB_AGAIN = -2,
+    CYRUSDB_EXISTS = -3,
+    CYRUSDB_INTERNAL = -4,
+    CYRUSDB_NOTFOUND = -5
+};
+
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
@@ -20,6 +33,12 @@ extern "C" {
     int hbase_init(const char *hostnames);
     int hbase_done();
     int hbase_open(const char *hostnames);
+    int hbase_fetch(const char *in_fname,
+                    const char *in_key, int keylen,
+                    const char **out_data, int *datalen);
+    int hbase_store(const char *in_fname,
+                    const char *in_key, int keylen,
+                    const char *in_data, int datalen);
 }
 
 static int dbinit = 0;
@@ -123,5 +142,56 @@ int hbase_open(const char *in_fname)
         syslog(LOG_ERR, "DBERROR: %s", tx.what());
         return 1;
     }
+    return 0;
+}
+
+int hbase_fetch(const char *in_fname,
+                const char *in_key, int keylen,
+                const char **out_data, int *datalen)
+{
+    syslog(LOG_DEBUG, "%s %s", __func__, in_fname);
+    std::string fname(in_fname);
+    fname = fname_to_tablename(fname);
+    std::string key(in_key, keylen);
+    std::vector<TRowResult> rowResult;
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    try {
+        dbengine.client->getRow(rowResult, fname, key, dummyAttributes);
+        if (rowResult.size()!=1) return CYRUSDB_NOTFOUND;
+
+        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        *out_data = (char *)malloc(value.size());
+        memcpy((char *)*out_data, value.data(), value.size());
+        *datalen = value.size();
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        *out_data = NULL;
+        *datalen = 0;
+        return CYRUSDB_INTERNAL;
+    }
+    return CYRUSDB_OK;
+}
+
+int hbase_store(const char *in_fname,
+                const char *in_key, int keylen,
+                const char *in_data, int datalen)
+{
+    syslog(LOG_DEBUG, "%s %s", __func__, in_fname);
+    std::string fname(in_fname);
+    fname = fname_to_tablename(fname);
+    std::string key(in_key, keylen);
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    std::vector<Mutation> mutations;
+    mutations.push_back(Mutation());
+    mutations.back().column = "entry:data";
+    if (in_data) {
+        std::string data(in_data, datalen);
+        mutations.back().value = data;
+    } else {
+        mutations.back().isDelete = true;
+    }
+    dbengine.client->mutateRow(fname, key, mutations, dummyAttributes);
     return 0;
 }
