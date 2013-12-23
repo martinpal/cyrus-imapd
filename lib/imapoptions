@@ -391,6 +391,10 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "hbase_hostnames", "", STRING }
 /* Comma separated list of HBase Thrift servers (in host[:port] format). */
 
+{ "hbase_maildir", 0, SWITCH }
+/* Store maildir data to hbase instead of local filesystem. Only enable this
+   if mailboxes.db is stored in hbase too. */
+
 # Commented out - there's no such thing as "hostname_mechs", but we need
 # this for the man page
 # { "hostname_mechs", NULL, STRING }
