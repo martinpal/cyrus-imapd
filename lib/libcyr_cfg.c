@@ -162,6 +162,10 @@ struct cyrusopt_s cyrus_options[] = {
       CFGVAL(const char *, ""),
       CYRUS_OPT_STRING },
 
+    { CYRUSOPT_HBASE_MAILDIR,
+      CFGVAL(long, 0),
+      CYRUS_OPT_SWITCH },
+
     { CYRUSOPT_LAST, { NULL }, CYRUS_OPT_NOTOPT }
 };
 

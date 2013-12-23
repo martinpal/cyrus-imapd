@@ -118,6 +118,8 @@ enum cyrus_opt {
     CYRUSOPT_SKIPLIST_ALWAYS_CHECKPOINT,
 		/* Hostnames of HBase Thrift servers ("") */
 		CYRUSOPT_HBASE_HOSTNAMES,
+		/* Store maildir data to hbase (OFF) */
+		CYRUSOPT_HBASE_MAILDIR,
 
     CYRUSOPT_LAST
     

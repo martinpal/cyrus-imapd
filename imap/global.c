@@ -259,6 +259,8 @@ int cyrus_init(const char *alt_config, const char *ident, unsigned flags)
 				  config_getswitch(IMAPOPT_SQL_USESSL));
 	libcyrus_config_setstring(CYRUSOPT_HBASE_HOSTNAMES,
 				  config_getstring(IMAPOPT_HBASE_HOSTNAMES));
+	libcyrus_config_setswitch(CYRUSOPT_HBASE_MAILDIR,
+				  config_getswitch(IMAPOPT_HBASE_MAILDIR));
 
 	/* Not until all configuration parameters are set! */
 	libcyrus_init();
