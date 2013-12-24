@@ -55,7 +55,7 @@ extern "C" {
 }
 
 static int dbinit = 0;
-static struct hbase_engine {
+struct hbase_engine {
     boost::shared_ptr<TSocket>                socket;
     boost::shared_ptr<TTransport>         transport;
     boost::shared_ptr<TProtocol>            protocol;

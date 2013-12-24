@@ -424,7 +424,7 @@ if test "$use_hbase" != "no"; then
   CXXFLAGS="$CFLAGS -fpic"
   LDFLAGS="$LDFLAGS -lstdc++ -lthrift"
 
-  CYRUSDB_OBJS="$CYRUSDB_OBJS cyrusdb_hbase.o cyrusdb_hbase_thrift.o Hbase_types.o Hbase_constants.o Hbase.o"
+  CYRUSDB_OBJS="$CYRUSDB_OBJS cyrusdb_hbase.o cyrusdb_hbase_thrift.o Hbase_types.o Hbase_constants.o Hbase.o mailbox_hbase.o"
   AC_DEFINE(HAVE_HBASE,[],[Build in HBase Thrift API support?])
 fi
 

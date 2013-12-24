@@ -84,6 +84,8 @@
 #include "index.h"
 #include "sync_log.h"
 
+#include "libcyr_cfg.h"
+
 /* Forward declarations */
 static void index_refresh(struct index_state *state);
 static void index_tellexists(struct index_state *state);
@@ -384,7 +386,14 @@ int index_writeseen(struct index_state *state)
     struct seendata sd = SEENDATA_INITIALIZER;
     struct mailbox *mailbox = state->mailbox;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     assert(mailbox->index_locktype == LOCK_EXCLUSIVE);
+#ifdef HAVE_HBASE
+    }
+#endif
 
     if (!state->seen_dirty)
 	return 0;

@@ -95,6 +95,8 @@
 #include "xstrlcpy.h"
 #include "xstrlcat.h"
 
+#include "libcyr_cfg.h"
+
 struct mailboxlist {
     struct mailboxlist *next;
     struct mailbox m;
@@ -561,6 +563,10 @@ fail:
 
 int mailbox_index_islocked(struct mailbox *mailbox, int write)
 {
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR))
+        return 1;
+#endif
     if (mailbox->index_locktype == LOCK_EXCLUSIVE) return 1;
     if (mailbox->index_locktype == LOCK_SHARED && !write) return 1;
     return 0;
@@ -927,6 +933,11 @@ int mailbox_open_index(struct mailbox *mailbox)
     fname = mailbox_meta_fname(mailbox, META_INDEX);
     if (!fname)
 	return IMAP_MAILBOX_BADNAME;
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_open_index(fname, mailbox);
+    } else {
+#endif
 
     mailbox->index_fd = open(fname, O_RDWR, 0);
     if (mailbox->index_fd == -1)
@@ -943,6 +954,9 @@ int mailbox_open_index(struct mailbox *mailbox)
 		&mailbox->index_len, mailbox->index_size,
 		"index", mailbox->name);
 
+#ifdef HAVE_HBASE
+    }
+#endif
     return 0;
 }
 
@@ -1303,6 +1317,10 @@ static int mailbox_refresh_index_map(struct mailbox *mailbox)
     size_t need_size;
     struct stat sbuf;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR))
+        return 0;
+#endif
     /* check if we need to extend the mmaped space for the index file
      * (i.e. new records appended since last read) */
     need_size = mailbox->i.start_offset +
@@ -1331,11 +1349,20 @@ static int mailbox_refresh_index_map(struct mailbox *mailbox)
 static int mailbox_read_index_header(struct mailbox *mailbox)
 {
     int r;
+#ifdef HAVE_HBASE
+    unsigned char hbuf[INDEX_HEADER_SIZE];
+#endif
 
     /* no dirty mailboxes please */
     if (mailbox->i.dirty)
 	abort();
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_read_header(mailbox, hbuf, INDEX_HEADER_SIZE);
+        r = mailbox_buf_to_index_header(hbuf, &mailbox->i);
+    } else {
+#endif
     /* need to be locked to ensure a consistent read - otherwise
      * a busy mailbox will get CRC errors due to rewrite happening
      * under our feet! */
@@ -1355,6 +1382,9 @@ static int mailbox_read_index_header(struct mailbox *mailbox)
 		"index", mailbox->name);
 
     r = mailbox_buf_to_index_header(mailbox->index_base, &mailbox->i);
+#ifdef HAVE_HBASE
+    }
+#endif
     if (r) return r;
 
     r = mailbox_refresh_index_map(mailbox);
@@ -1417,7 +1447,16 @@ int mailbox_read_index_record(struct mailbox *mailbox,
     const char *buf;
     unsigned offset;
     int r;
+#ifdef HAVE_HBASE
+    unsigned char hbuf[INDEX_RECORD_SIZE];
+#endif
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_read_record(mailbox, recno, hbuf, INDEX_RECORD_SIZE);
+        buf = hbuf;
+    } else {
+#endif
     offset = mailbox->i.start_offset + (recno-1) * mailbox->i.record_size;
 
     if (offset + mailbox->i.record_size > mailbox->index_size) {
@@ -1428,6 +1467,9 @@ int mailbox_read_index_record(struct mailbox *mailbox,
     }
 
     buf = mailbox->index_base + offset;
+#ifdef HAVE_HBASE
+    }
+#endif
 
     r = mailbox_buf_to_index_record(buf, record);
 
@@ -1481,6 +1523,12 @@ int mailbox_lock_index(struct mailbox *mailbox, int locktype)
     struct stat sbuf;
     int r = 0;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        r = mailbox_read_index_header(mailbox);
+        return 0;
+    }
+#endif
     assert(mailbox->index_fd != -1);
     assert(!mailbox->index_locktype);
 
@@ -1861,11 +1909,23 @@ int mailbox_commit(struct mailbox *mailbox)
 
     assert(mailbox_index_islocked(mailbox, 1));
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     if (mailbox->i.start_offset < INDEX_HEADER_SIZE)
 	fatal("Mailbox offset bug", EC_SOFTWARE);
+#ifdef HAVE_HBASE
+    }
+#endif
 
     mailbox_index_header_to_buf(&mailbox->i, buf);
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_update_header(mailbox, buf, INDEX_HEADER_SIZE);
+    } else {
+#endif
     lseek(mailbox->index_fd, 0, SEEK_SET);
     n = retry_write(mailbox->index_fd, buf, INDEX_HEADER_SIZE);
     if ((unsigned long)n != INDEX_HEADER_SIZE || fsync(mailbox->index_fd)) {
@@ -1873,6 +1933,9 @@ int mailbox_commit(struct mailbox *mailbox)
 	       mailbox->name);
 	return IMAP_IOERROR;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* remove all dirty flags! */
     mailbox->i.dirty = 0;
@@ -2127,6 +2190,11 @@ int mailbox_rewrite_index_record(struct mailbox *mailbox,
 
     mailbox_index_record_to_buf(record, buf);
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_append(mailbox, record->uid, buf, INDEX_RECORD_SIZE);
+    } else {
+#endif
     offset = mailbox->i.start_offset +
 	     (record->recno-1) * mailbox->i.record_size;
 
@@ -2157,6 +2225,9 @@ int mailbox_rewrite_index_record(struct mailbox *mailbox,
 		session_id(), mailbox->name, mailbox->uniqueid,
 		record->uid, message_guid_encode(&record->guid));
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     return mailbox_refresh_index_map(mailbox);
 }
@@ -2175,7 +2246,14 @@ int mailbox_append_index_record(struct mailbox *mailbox,
     struct utimbuf settime;
     uint32_t recno;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     assert(mailbox_index_islocked(mailbox, 1));
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* Append MUST be a higher UID than any we've yet seen */
     assert(record->uid > mailbox->i.last_uid)
@@ -2241,6 +2319,11 @@ int mailbox_append_index_record(struct mailbox *mailbox,
     
     recno = mailbox->i.num_records + 1;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_append(mailbox, record->uid, buf, INDEX_RECORD_SIZE);
+    } else {
+#endif
     offset = mailbox->i.start_offset +
 	     ((recno - 1) * mailbox->i.record_size);
 
@@ -2257,6 +2340,9 @@ int mailbox_append_index_record(struct mailbox *mailbox,
 	       mailbox->name);
 	return IMAP_IOERROR;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     mailbox->i.last_uid = record->uid;
     mailbox->i.num_records = recno;
@@ -2748,6 +2834,11 @@ int mailbox_create(const char *name,
 	goto done;
     }
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_open_index(fname, mailbox);
+    } else {
+#endif
     fname = mailbox_meta_fname(mailbox, META_INDEX);
     if (!fname) {
 	syslog(LOG_ERR, "IOERROR: Mailbox name too long (%s)", mailbox->name);
@@ -2767,6 +2858,9 @@ int mailbox_create(const char *name,
 	goto done;
     }
     mailbox->index_locktype = LOCK_EXCLUSIVE;
+#ifdef HAVE_HBASE
+    }
+#endif
 
     fname = mailbox_meta_fname(mailbox, META_CACHE);
     if (!fname) {
@@ -3966,6 +4060,13 @@ static int mailbox_wipe_index_record(struct mailbox *mailbox,
     assert(mailbox_index_islocked(mailbox, 1));
     assert(record->recno > 0 &&
 	   record->recno <= mailbox->i.num_records);
+
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_index_wipe_record(mailbox, record->recno);
+        return 0;
+    }
+#endif
 
     record->uid = 0;
     record->system_flags |= FLAG_EXPUNGED | FLAG_UNLINKED;
