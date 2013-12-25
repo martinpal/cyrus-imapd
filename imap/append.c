@@ -74,6 +74,8 @@
 
 #include "message_guid.h"
 
+#include "libcyr_cfg.h"
+
 struct stagemsg {
     char fname[1024];
 
@@ -443,6 +445,13 @@ int append_fromstage(struct appendstate *as, struct body **body,
 
     /* Create message file */
     as->nummsg++;
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        if (body && !*body) *body = (struct body *) xmalloc(sizeof(struct body));
+        r = hbase_mailbox_copyfile(mailbox, p, message_index.uid, body);
+	if (!r) r = message_create_record(&message_index, *body);
+    } else {
+#endif
     fname = mailbox_message_fname(mailbox, message_index.uid);
 
     r = mailbox_copyfile(p, fname, nolink);
@@ -463,6 +472,9 @@ int append_fromstage(struct appendstate *as, struct body **body,
 	append_abort(as);
 	return r;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* Handle flags the user wants to set in the message */
     for (i = 0; i < nflags; i++) {

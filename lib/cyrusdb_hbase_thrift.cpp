@@ -166,6 +166,7 @@ int hbase_fetch(const char *in_fname,
     std::string fname(in_fname);
     fname = fname_to_tablename(fname);
     std::string key(in_key, keylen);
+    syslog(LOG_DEBUG, "%s %s", __func__, key.c_str());
     std::vector<TRowResult> rowResult;
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
@@ -177,6 +178,7 @@ int hbase_fetch(const char *in_fname,
         *out_data = (char *)malloc(value.size());
         memcpy((char *)*out_data, value.data(), value.size());
         *datalen = value.size();
+        syslog(LOG_DEBUG, "%s found", __func__);
     } catch (const TException &tx) {
         syslog(LOG_ERR, "DBERROR: %s", tx.what());
         *out_data = NULL;

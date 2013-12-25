@@ -744,6 +744,11 @@ int mailbox_map_message(struct mailbox *mailbox, unsigned long uid,
     char *fname;
     struct stat sbuf;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        return hbase_mailbox_readfile(mailbox, uid, basep, lenp);
+    }
+#endif
     fname = mailbox_message_fname(mailbox, uid);
 
     msgfd = open(fname, O_RDONLY, 0666);
@@ -768,6 +773,13 @@ void mailbox_unmap_message(struct mailbox *mailbox __attribute__((unused)),
 			   unsigned long uid __attribute__((unused)),
 			   const char **basep, unsigned long *lenp)
 {
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        free(*basep);
+        *basep = NULL;
+        return;
+    }
+#endif
     map_free(basep, lenp);
 }
 
@@ -2258,11 +2270,18 @@ int mailbox_append_index_record(struct mailbox *mailbox,
     /* Append MUST be a higher UID than any we've yet seen */
     assert(record->uid > mailbox->i.last_uid)
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     /* Append MUST have a message with data */
     assert(record->size);
 
     /* GUID must not be null */
     assert(!message_guid_isnull(&record->guid));
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* belt AND suspenders - check the previous record too */
     if (mailbox->i.num_records) {
@@ -2293,8 +2312,15 @@ int mailbox_append_index_record(struct mailbox *mailbox,
     if (!(record->system_flags & FLAG_UNLINKED)) {
 	/* make the file timestamp correct */
 	settime.actime = settime.modtime = record->internaldate;
+#ifdef HAVE_HBASE
+        if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        } else {
+#endif
 	if (utime(mailbox_message_fname(mailbox, record->uid), &settime) == -1)
 	    return IMAP_IOERROR;
+#ifdef HAVE_HBASE
+        }
+#endif
 
 	/* write the cache record before buffering the message, it
 	 * will set the cache_offset field. */
@@ -3175,10 +3201,18 @@ int mailbox_copy_files(struct mailbox *mailbox, const char *newpart,
 
 	strncpy(oldbuf, mailbox_message_fname(mailbox, record.uid),
 		MAX_MAILBOX_PATH);
+#ifdef HAVE_HBASE
+        if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+            r = hbase_mailbox_copyfile(mailbox, oldbuf, record.uid, NULL);
+        } else {
+#endif
 	strncpy(newbuf, mboxname_datapath(newpart, newname, record.uid),
 		MAX_MAILBOX_PATH);
 
 	r = mailbox_copyfile(oldbuf, newbuf, 0);
+#ifdef HAVE_HBASE
+        }
+#endif
 	if (r) return r;
     }
 
