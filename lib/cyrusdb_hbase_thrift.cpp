@@ -175,7 +175,7 @@ int hbase_fetch(const char *in_fname,
         if (rowResult.size()!=1) return CYRUSDB_NOTFOUND;
 
         std::string &value = rowResult[0].columns.find("entry:data")->second.value;
-        *out_data = (char *)malloc(value.size());
+        *out_data = (char *)malloc(value.size()); // FIXME leaks
         memcpy((char *)*out_data, value.data(), value.size());
         *datalen = value.size();
         syslog(LOG_DEBUG, "%s found", __func__);

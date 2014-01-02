@@ -607,7 +607,7 @@ int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t uid, char 
         std::string &value = rowResult[0].columns.find(CF_CACHE + "data")->second.value;
         if (buf && len) {
             *len = value.size();
-            *buf = (char*)malloc(*len);
+            *buf = (char*)malloc(*len); // FIXME leaks
             memcpy(*buf, value.data(), *len);
         }
     } catch (const TException &tx) {

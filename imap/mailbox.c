@@ -1543,6 +1543,7 @@ int mailbox_read_index_record(struct mailbox *mailbox,
 
 /*
  * bsearch() function to compare two index record buffers by UID
+ * FIXME this function appears unused - delete it?
  */
 static int rec_compar(const void *key, const void *mem)
 {
@@ -1558,6 +1559,7 @@ static int rec_compar(const void *key, const void *mem)
 
 /*
  * Find the index record in mailbox corresponding to UID
+ * FIXME this function appears unused - delete it?
  */
 int mailbox_find_index_record(struct mailbox *mailbox, uint32_t uid,
 			      struct index_record *record)
@@ -2346,7 +2348,7 @@ int mailbox_append_index_record(struct mailbox *mailbox,
     /* Append MUST be a higher UID than any we've yet seen */
     assert(record->uid > mailbox->i.last_uid)
 
-#ifdef HAVE_HBASE
+#ifdef HAVE_HBASE /* FIXME delete!!! */
     if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
     } else {
 #endif
@@ -3891,6 +3893,7 @@ static int records_match(const char *mboxname,
     return match;
 }
 
+/* TODO */
 static int mailbox_reconstruct_compare_update(struct mailbox *mailbox,
 					      struct index_record *record,
 					      bit32 *valid_user_flags,
@@ -4233,6 +4236,7 @@ static int mailbox_wipe_index_record(struct mailbox *mailbox,
 /*
  * Reconstruct the single mailbox named 'name'
  */
+/* TODO */
 int mailbox_reconstruct(const char *name, int flags)
 {
     /* settings */

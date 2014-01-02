@@ -447,7 +447,7 @@ int append_fromstage(struct appendstate *as, struct body **body,
     as->nummsg++;
 #ifdef HAVE_HBASE
     if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
-        if (body && !*body) *body = (struct body *) xmalloc(sizeof(struct body));
+        if (body && !*body) *body = (struct body *) xmalloc(sizeof(struct body));  /* FIXME leaks */
         r = hbase_mailbox_copyfile(mailbox, p, message_index.uid, body);
 	if (!r) r = message_create_record(&message_index, *body);
     } else {
