@@ -511,6 +511,7 @@ int hbase_mailbox_copyfile(struct mailbox *mailbox, const char *from, uint32_t u
         columns.push_back(ColumnDescriptor());
         columns.back().name = "entry:";
         columns.back().maxVersions = 1;
+        columns.back().compression = "GZ";
 
         syslog(LOG_DEBUG, "HBase: Creating table %s", table.c_str());
         try {
