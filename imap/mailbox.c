@@ -458,6 +458,12 @@ int mailbox_open_cache(struct mailbox *mailbox)
     unsigned generation;
     int retry = 0;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+	char *fname = mailbox_meta_fname(mailbox, META_CACHE);
+        return hbase_mailbox_open_cache(fname, mailbox);
+    }
+#endif
     /* already got everything? great */
     if (mailbox->cache_fd != -1 && !mailbox->need_cache_refresh)
 	return 0;
@@ -594,6 +600,22 @@ int mailbox_append_cache(struct mailbox *mailbox,
 	return r; /* unable to append */
     }
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        /* no parsed cache present */
+        if (!record->crec.len)
+            return 0;
+
+        /* cache offset already there - probably already been written */
+        if (record->cache_offset)
+            return 0;
+
+        if (record->cache_crc != crc32_buf(cache_buf(record)))
+            return IMAP_MAILBOX_CRC;
+
+        return hbase_mailbox_cache_append(mailbox, record->uid, cache_base(record), cache_size(record));
+    } else {
+#endif
     r = cache_append_record(mailbox->cache_fd, record);
     if (r) {
 	syslog(LOG_ERR, "Failed to append cache to %s for %u",
@@ -603,6 +625,9 @@ int mailbox_append_cache(struct mailbox *mailbox,
 
     mailbox->cache_dirty = 1;
     mailbox->need_cache_refresh = 1;
+#ifdef HAVE_HBASE
+    }
+#endif
 
     return 0;
 }
@@ -617,6 +642,16 @@ int mailbox_cacherecord(struct mailbox *mailbox,
     if (record->crec.len)
 	return 0;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        struct buf buffer;
+        r = hbase_mailbox_cache_read_record(mailbox, record->uid, &buffer.s, &buffer.len);
+        if (r) goto done;
+
+        r = cache_parserecord(&buffer, 0, &record->crec);
+        /* free(buffer.s); FIXME this leaks - cache_parserecord sets up pointer INTO this buffer and we tuhs cannot free ti here. But when to free it then?! perhaps in mailbox_close? */
+    } else {
+#endif
     if (!record->cache_offset)
 	r = IMAP_IOERROR;
     if (r) goto done;
@@ -627,6 +662,9 @@ int mailbox_cacherecord(struct mailbox *mailbox,
     /* try to parse the cache record */
     r = cache_parserecord(&mailbox->cache_buf,
 			  record->cache_offset, &record->crec);
+#ifdef HAVE_HBASE
+    }
+#endif
 
     if (r) goto done;
     crc = crc32_buf(cache_buf(record));
@@ -677,6 +715,10 @@ int mailbox_commit_cache(struct mailbox *mailbox)
 
     mailbox->cache_dirty = 0;
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR))
+        return 0;
+#endif
     /* not open! That's bad */
     if (mailbox->cache_fd == -1)
 	abort(); 
@@ -2624,7 +2666,7 @@ static int mailbox_index_repack(struct mailbox *mailbox)
 	}
 
 	/* read in the old cache record */
-	r = mailbox_cacherecord(mailbox, &record);
+	r = mailbox_cacherecord(mailbox, &record); /* TODO */
 	if (r) goto fail;
 
 	r = mailbox_repack_add(repack, &record);
@@ -2863,6 +2905,7 @@ int mailbox_create(const char *name,
 #ifdef HAVE_HBASE
     if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
         hbase_mailbox_open_index(fname, mailbox);
+        hbase_mailbox_open_cache(fname, mailbox);
     } else {
 #endif
     fname = mailbox_meta_fname(mailbox, META_INDEX);
@@ -2884,9 +2927,6 @@ int mailbox_create(const char *name,
 	goto done;
     }
     mailbox->index_locktype = LOCK_EXCLUSIVE;
-#ifdef HAVE_HBASE
-    }
-#endif
 
     fname = mailbox_meta_fname(mailbox, META_CACHE);
     if (!fname) {
@@ -2900,6 +2940,9 @@ int mailbox_create(const char *name,
 	r = IMAP_IOERROR;
 	goto done;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
         
     if (hasquota) mailbox_set_quotaroot(mailbox, quotaroot);
 
@@ -2925,6 +2968,11 @@ int mailbox_create(const char *name,
 
     /* write out the initial generation number to the cache file */
     *((bit32 *)generation_buf) = htonl(mailbox->i.generation_no);
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_cache_update_header(mailbox, generation_buf, 4);
+    } else {
+#endif
     n = retry_write(mailbox->cache_fd, generation_buf, 4);
     if (n != 4 || fsync(mailbox->cache_fd)) {
 	syslog(LOG_ERR, "IOERROR: writing initial cache for %s: %m",
@@ -2932,6 +2980,9 @@ int mailbox_create(const char *name,
 	r = IMAP_IOERROR;
 	goto done;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     r = seen_create_mailbox(NULL, mailbox);
     if (r) goto done;

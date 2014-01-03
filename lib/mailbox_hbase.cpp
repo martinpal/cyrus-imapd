@@ -282,6 +282,10 @@ extern "C" {
     int hbase_mailbox_index_wipe_record(struct mailbox *mailbox, uint32_t uid);
     int hbase_mailbox_copyfile(struct mailbox *mailbox, const char *from, uint32_t uid, struct body **body);
     int hbase_mailbox_readfile(struct mailbox *mailbox, uint32_t uid, unsigned char **buf, int *size);
+    int hbase_mailbox_open_cache(const char *fname, struct mailbox *mailbox);
+    int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t recno, char **buf, unsigned *len);
+    int hbase_mailbox_cache_update_header(struct mailbox *mailbox, unsigned char *buf, int size);
+    int hbase_mailbox_cache_append(struct mailbox *mailbox, uint32_t uid, unsigned char *buf, int size);
 }
 
 typedef std::vector<std::string> StrVec;
@@ -572,5 +576,132 @@ int hbase_mailbox_readfile(struct mailbox *mailbox, uint32_t uid, unsigned char 
         syslog(LOG_ERR, "DBERROR: %s", tx.what());
         return -1;
     }
+    return 0;
+}
+
+int hbase_mailbox_open_cache(const char *fname, struct mailbox *mailbox)
+{
+    syslog(LOG_DEBUG, "%s: %s", __func__, fname);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+    const std::string table(name_to_tablename(mailbox->name, "cache"));
+    syslog(LOG_DEBUG, "tablename: %s", table.c_str());
+    bool found = false;
+    syslog(LOG_DEBUG, "HBase: Scanning tables...");
+    StrVec tables;
+    try {
+        dbengine.client->getTableNames(tables);
+        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
+            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
+            if (table == *it) {
+                found = true;
+                break;
+            }
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return 1;
+    }
+    syslog(LOG_DEBUG, "HBase: ... done scanning tables");
+    if (found) return 0;
+    // Create the demo table with one column family (entry:)
+    ColVec columns;
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = "entry:";
+    columns.back().maxVersions = 1;
+
+    syslog(LOG_DEBUG, "HBase: Creating table %s", table.c_str());
+    try {
+        dbengine.client->createTable(table, columns);
+    } catch (const AlreadyExists &ae) {
+        syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return 1;
+    }
+    return 0;
+}
+
+int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t uid, char **buf, unsigned *len)
+{
+    syslog(LOG_DEBUG, "%s", __func__);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+    const std::string table(name_to_tablename(mailbox->name, "cache"));
+    std::string key(boost::lexical_cast<std::string>(uid));
+    std::vector<TRowResult> rowResult;
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    try {
+        dbengine.client->getRow(rowResult, table, key, dummyAttributes);
+        if (rowResult.size()!=1) return -1;
+
+        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        if (buf && len) {
+            *len = value.size();
+            *buf = (char*)malloc(*len);
+            memcpy(*buf, value.data(), *len);
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return -1;
+    }
+    return 0;
+}
+
+int hbase_mailbox_cache_update_header(struct mailbox *mailbox, unsigned char *buf, int size)
+{
+    syslog(LOG_DEBUG, "%s", __func__);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+    hbase_mailbox_open_index("", mailbox);
+    const std::string table(name_to_tablename(mailbox->name, "cache"));
+    std::string key("header");
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    std::vector<Mutation> mutations;
+    mutations.push_back(Mutation());
+    mutations.back().column = "entry:data";
+    std::string data((char*)buf, size);
+    mutations.back().value = data;
+    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    return 0;
+}
+
+int hbase_mailbox_cache_append(struct mailbox *mailbox, uint32_t uid, unsigned char *buf, int size)
+{
+    syslog(LOG_DEBUG, "%s %d", __func__, uid);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+    const std::string table(name_to_tablename(mailbox->name, "cache"));
+    std::string key(boost::lexical_cast<std::string>(uid));
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    std::vector<Mutation> mutations;
+    mutations.push_back(Mutation());
+    mutations.back().column = "entry:data";
+    std::string data((char*)buf, size);
+    mutations.back().value = data;
+    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
     return 0;
 }
