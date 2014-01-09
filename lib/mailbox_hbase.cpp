@@ -291,18 +291,73 @@ extern "C" {
 typedef std::vector<std::string> StrVec;
 typedef std::vector<ColumnDescriptor> ColVec;
 
-std::string name_to_tablename(std::string name, std::string file)
-{
-    name.replace(name.find('!'), 1, 1, '_');
-    return name + '_' + file;
-}
+static const std::string TABLE("message_store");
+static const std::string CF_MESSAGES("messages:");
+static const std::string CF_INDEX("index:");
+static const std::string CF_CACHE("cache:");
+static const std::string CF_HEADER("header:");
 
+static const std::string SEPARATOR("\t");
+
+// from cyrusdb_hbase_thrift.cpp
 extern struct hbase_engine {
     boost::shared_ptr<TSocket>                socket;
     boost::shared_ptr<TTransport>         transport;
     boost::shared_ptr<TProtocol>            protocol;
     boost::shared_ptr<HbaseClient>        client;
 } dbengine;
+
+static void ensure_table_exists()
+{
+    // creates the message store tabel to make developers life easier
+    // FIXME remove this function from production code - table must be created and configured during deployment, not at runtime
+    bool found = false;
+    StrVec tables;
+    try {
+        dbengine.client->getTableNames(tables);
+        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
+            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
+            if (TABLE == *it) {
+                found = true;
+                break;
+            }
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        assert(0);
+    }
+    if (found) return;
+
+    // Create the table with column families:
+    // - messages:
+    // - index:
+    // - cache:
+    // - header
+    ColVec columns;
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = CF_MESSAGES;
+    columns.back().maxVersions = 1;
+    columns.back().compression = "GZ";
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = CF_INDEX;
+    columns.back().maxVersions = 1;
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = CF_CACHE;
+    columns.back().maxVersions = 1;
+    columns.push_back(ColumnDescriptor());
+    columns.back().name = CF_HEADER;
+    columns.back().maxVersions = 1;
+
+    syslog(LOG_DEBUG, "HBase: Creating table %s", TABLE.c_str());
+    try {
+        dbengine.client->createTable(TABLE, columns);
+    } catch (const AlreadyExists &ae) {
+        syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        assert(0);
+    }
+}
 
 int hbase_mailbox_open_index(const char *fname, struct mailbox *mailbox)
 {
@@ -314,41 +369,9 @@ int hbase_mailbox_open_index(const char *fname, struct mailbox *mailbox)
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    syslog(LOG_DEBUG, "tablename: %s", table.c_str());
-    bool found = false;
-    syslog(LOG_DEBUG, "HBase: Scanning tables...");
-    StrVec tables;
-    try {
-        dbengine.client->getTableNames(tables);
-        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
-            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
-            if (table == *it) {
-                found = true;
-                break;
-            }
-        }
-    } catch (const TException &tx) {
-        syslog(LOG_ERR, "DBERROR: %s", tx.what());
-        return 1;
-    }
-    syslog(LOG_DEBUG, "HBase: ... done scanning tables");
-    if (found) return 0;
-    // Create the demo table with one column family (entry:)
-    ColVec columns;
-    columns.push_back(ColumnDescriptor());
-    columns.back().name = "entry:";
-    columns.back().maxVersions = 1;
+    ensure_table_exists();
 
-    syslog(LOG_DEBUG, "HBase: Creating table %s", table.c_str());
-    try {
-        dbengine.client->createTable(table, columns);
-    } catch (const AlreadyExists &ae) {
-        syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
-    } catch (const TException &tx) {
-        syslog(LOG_ERR, "DBERROR: %s", tx.what());
-        return 1;
-    }
+    // nothing to do ...
     return 0;
 }
 
@@ -362,17 +385,17 @@ int hbase_mailbox_index_read_header(struct mailbox *mailbox, unsigned char *buf,
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    hbase_mailbox_open_index("", mailbox);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    std::string key("header");
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + "header";
     std::vector<TRowResult> rowResult;
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     try {
-        dbengine.client->getRow(rowResult, table, key, dummyAttributes);
+        dbengine.client->getRow(rowResult, TABLE, key, dummyAttributes);
         if (rowResult.size()!=1) return -1;
 
-        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        std::string &value = rowResult[0].columns.find(CF_INDEX + "data")->second.value;
         memcpy(buf, value.data(), size);
     } catch (const TException &tx) {
         syslog(LOG_ERR, "DBERROR: %s", tx.what());
@@ -391,16 +414,17 @@ int hbase_mailbox_index_read_record(struct mailbox *mailbox, uint32_t recno, uns
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    std::string key(boost::lexical_cast<std::string>(recno));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(recno);
     std::vector<TRowResult> rowResult;
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     try {
-        dbengine.client->getRow(rowResult, table, key, dummyAttributes);
+        dbengine.client->getRow(rowResult, TABLE, key, dummyAttributes);
         if (rowResult.size()!=1) return -1;
 
-        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        std::string &value = rowResult[0].columns.find(CF_INDEX + "data")->second.value;
         memcpy(buf, value.data(), size);
     } catch (const TException &tx) {
         syslog(LOG_ERR, "DBERROR: %s", tx.what());
@@ -419,17 +443,17 @@ int hbase_mailbox_index_update_header(struct mailbox *mailbox, unsigned char *bu
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    hbase_mailbox_open_index("", mailbox);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    std::string key("header");
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + "header";
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_INDEX + "data";
     std::string data((char*)buf, size);
     mutations.back().value = data;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     return 0;
 }
 
@@ -443,16 +467,17 @@ int hbase_mailbox_index_append(struct mailbox *mailbox, uint32_t uid, unsigned c
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    std::string key(boost::lexical_cast<std::string>(uid));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_INDEX + "data";
     std::string data((char*)buf, size);
     mutations.back().value = data;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     return 0;
 }
 
@@ -466,15 +491,16 @@ int hbase_mailbox_index_wipe_record(struct mailbox *mailbox, uint32_t uid)
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "index"));
-    std::string key(boost::lexical_cast<std::string>(uid));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_INDEX + "data";
     mutations.back().isDelete = true;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     return 0;
 }
 
@@ -489,47 +515,9 @@ int hbase_mailbox_copyfile(struct mailbox *mailbox, const char *from, uint32_t u
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    // make sure the table exists
-    const std::string table(name_to_tablename(mailbox->name, "messages"));
-    syslog(LOG_DEBUG, "tablename: %s", table.c_str());
-    bool found = false;
-    syslog(LOG_DEBUG, "HBase: Scanning tables...");
-    StrVec tables;
-    try {
-        dbengine.client->getTableNames(tables);
-        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
-            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
-            if (table == *it) {
-                found = true;
-                break;
-            }
-        }
-    } catch (const TException &tx) {
-        syslog(LOG_ERR, "DBERROR: %s", tx.what());
-        return 1;
-    }
-    syslog(LOG_DEBUG, "HBase: ... done scanning tables");
-    if (!found) {
-        // Create the demo table with one column family (entry:)
-        ColVec columns;
-        columns.push_back(ColumnDescriptor());
-        columns.back().name = "entry:";
-        columns.back().maxVersions = 1;
-        columns.back().compression = "GZ";
 
-        syslog(LOG_DEBUG, "HBase: Creating table %s", table.c_str());
-        try {
-            dbengine.client->createTable(table, columns);
-        } catch (const AlreadyExists &ae) {
-            syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
-        } catch (const TException &tx) {
-            syslog(LOG_ERR, "DBERROR: %s", tx.what());
-            return 1;
-        }
-    }
-
-    // insert new mail
-    std::string key(boost::lexical_cast<std::string>(uid));
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     char *src_base = 0;
@@ -538,10 +526,10 @@ int hbase_mailbox_copyfile(struct mailbox *mailbox, const char *from, uint32_t u
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_MESSAGES + "data";
     std::string data((char*)src_base, src_size);
     mutations.back().value = data;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     if (body) {
         message_parse_mapped(src_base, src_size, *body);
     }
@@ -559,16 +547,17 @@ int hbase_mailbox_readfile(struct mailbox *mailbox, uint32_t uid, unsigned char 
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "messages"));
-    std::string key(boost::lexical_cast<std::string>(uid));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     std::vector<TRowResult> rowResult;
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     try {
-        dbengine.client->getRow(rowResult, table, key, dummyAttributes);
+        dbengine.client->getRow(rowResult, TABLE, key, dummyAttributes);
         if (rowResult.size()!=1) return -1;
 
-        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        std::string &value = rowResult[0].columns.find(CF_MESSAGES + "data")->second.value;
         *size = value.size();
         *buf = (unsigned char*)malloc(*size);
         memcpy(*buf, value.data(), *size);
@@ -589,42 +578,8 @@ int hbase_mailbox_open_cache(const char *fname, struct mailbox *mailbox)
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "cache"));
-    syslog(LOG_DEBUG, "tablename: %s", table.c_str());
-    bool found = false;
-    syslog(LOG_DEBUG, "HBase: Scanning tables...");
-    StrVec tables;
-    try {
-        dbengine.client->getTableNames(tables);
-        for (StrVec::const_iterator it = tables.begin(); it != tables.end(); ++it) {
-            syslog(LOG_DEBUG, "HBase: Found %s", it->c_str());
-            if (table == *it) {
-                found = true;
-                break;
-            }
-        }
-    } catch (const TException &tx) {
-        syslog(LOG_ERR, "DBERROR: %s", tx.what());
-        return 1;
-    }
-    syslog(LOG_DEBUG, "HBase: ... done scanning tables");
-    if (found) return 0;
-    // Create the demo table with one column family (entry:)
-    ColVec columns;
-    columns.push_back(ColumnDescriptor());
-    columns.back().name = "entry:";
-    columns.back().maxVersions = 1;
 
-    syslog(LOG_DEBUG, "HBase: Creating table %s", table.c_str());
-    try {
-        dbengine.client->createTable(table, columns);
-    } catch (const AlreadyExists &ae) {
-        syslog(LOG_ERR, "HBase: %s", ae.message.c_str());
-    } catch (const TException &tx) {
-        syslog(LOG_ERR, "DBERROR: %s", tx.what());
-        return 1;
-    }
-    return 0;
+    // nothing to do
 }
 
 int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t uid, char **buf, unsigned *len)
@@ -637,16 +592,17 @@ int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t uid, char 
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "cache"));
-    std::string key(boost::lexical_cast<std::string>(uid));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     std::vector<TRowResult> rowResult;
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     try {
-        dbengine.client->getRow(rowResult, table, key, dummyAttributes);
+        dbengine.client->getRow(rowResult, TABLE, key, dummyAttributes);
         if (rowResult.size()!=1) return -1;
 
-        std::string &value = rowResult[0].columns.find("entry:data")->second.value;
+        std::string &value = rowResult[0].columns.find(CF_CACHE + "data")->second.value;
         if (buf && len) {
             *len = value.size();
             *buf = (char*)malloc(*len);
@@ -669,17 +625,17 @@ int hbase_mailbox_cache_update_header(struct mailbox *mailbox, unsigned char *bu
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    hbase_mailbox_open_index("", mailbox);
-    const std::string table(name_to_tablename(mailbox->name, "cache"));
-    std::string key("header");
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + "header";
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_CACHE + "data";
     std::string data((char*)buf, size);
     mutations.back().value = data;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     return 0;
 }
 
@@ -693,15 +649,16 @@ int hbase_mailbox_cache_append(struct mailbox *mailbox, uint32_t uid, unsigned c
     syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
     syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
     syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
-    const std::string table(name_to_tablename(mailbox->name, "cache"));
-    std::string key(boost::lexical_cast<std::string>(uid));
+
+    std::string key(mailbox->name);
+    key += SEPARATOR + boost::lexical_cast<std::string>(uid);
     const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
 
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
-    mutations.back().column = "entry:data";
+    mutations.back().column = CF_CACHE + "data";
     std::string data((char*)buf, size);
     mutations.back().value = data;
-    dbengine.client->mutateRow(table, key, mutations, dummyAttributes);
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
     return 0;
 }
