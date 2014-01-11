@@ -2907,6 +2907,10 @@ int mailbox_create(const char *name,
 
     hasquota = quota_findroot(quotaroot, sizeof(quotaroot), name);
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     /* ensure all paths exist */
     for (n = 0; createfnames[n]; n++) {
 	fname = mailbox_meta_fname(mailbox, createfnames[n]);
@@ -2921,6 +2925,9 @@ int mailbox_create(const char *name,
 	    goto done;
 	}
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* ensure we can fit the longest possible file name */
     fname = mailbox_message_fname(mailbox, UINT32_MAX);
@@ -2929,12 +2936,19 @@ int mailbox_create(const char *name,
 	r = IMAP_MAILBOX_BADNAME;
 	goto done;
     }
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+    } else {
+#endif
     /* and create the directory too :) */
     if (cyrus_mkdir(fname, 0755) == -1) {
 	syslog(LOG_ERR, "IOERROR: creating %s: %m", fname);
 	r = IMAP_IOERROR;
 	goto done;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
 #ifdef HAVE_HBASE
     if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
