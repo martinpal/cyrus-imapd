@@ -1137,6 +1137,12 @@ int mailbox_read_header(struct mailbox *mailbox, char **aclptr)
     if (mailbox->header_fd != -1)
 	close(mailbox->header_fd);
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        hbase_mailbox_header_read(mailbox, &base, &len);
+    } else {
+#endif
+
     fname = mailbox_meta_fname(mailbox, META_HEADER);
     mailbox->header_fd = open(fname, O_RDONLY, 0);
 
@@ -1163,6 +1169,9 @@ int mailbox_read_header(struct mailbox *mailbox, char **aclptr)
 	r = IMAP_MAILBOX_BADFORMAT;
 	goto done;
     }
+#ifdef HAVE_HBASE
+    }
+#endif
 
     /* Read quota file pathname */
     p = base + sizeof(MAILBOX_HEADER_MAGIC)-1;
@@ -1760,10 +1769,32 @@ int mailbox_commit_header(struct mailbox *mailbox)
     const char *newfname;
     struct iovec iov[10];
     int niov;
+#ifdef HAVE_HBASE
+    unsigned char hbuf[1024];
+    unsigned char *end = hbuf;
+#endif
 
     if (!mailbox->header_dirty)
 	return 0; /* nothing to write! */
 
+#ifdef HAVE_HBASE
+    if (libcyrus_config_getswitch(CYRUSOPT_HBASE_MAILDIR)) {
+        memcpy(end, MAILBOX_HEADER_MAGIC, sizeof(MAILBOX_HEADER_MAGIC) - 1);
+        end += sizeof(MAILBOX_HEADER_MAGIC) - 1;
+	quotaroot = mailbox->quotaroot ? mailbox->quotaroot : "";
+        r = snprintf(end, hbuf + 1024 - end, "%s\t%s\n", quotaroot, mailbox->uniqueid);
+        end += r;
+	for (flag = 0; flag < MAX_USER_FLAGS; flag++) {
+	    if (mailbox->flagname[flag]) {
+                r = snprintf(end, hbuf + 1024 - end, "%s ", mailbox->flagname[flag]);
+                end += r;
+	    }
+	}
+        r = snprintf(end, hbuf + 1024 - end, "\n%s\n", mailbox->acl);
+        end += r;
+        hbase_mailbox_header_update(mailbox, hbuf, end-hbuf);
+    } else {
+#endif
     /* we actually do all header actions under an INDEX lock, because
      * we need to write the crc32 to be consistent! */
     assert(mailbox_index_islocked(mailbox, 1));
@@ -1822,6 +1853,9 @@ int mailbox_commit_header(struct mailbox *mailbox)
     /* rename the new header file over the old one */
     r = mailbox_meta_rename(mailbox, META_HEADER);
     if (r) return r;
+#ifdef HAVE_HBASE
+    }
+#endif
     mailbox->header_dirty = 0; /* we wrote it out, so not dirty any more */
 
     /* re-read the header */

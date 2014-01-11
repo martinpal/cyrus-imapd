@@ -286,6 +286,8 @@ extern "C" {
     int hbase_mailbox_cache_read_record(struct mailbox *mailbox, uint32_t recno, char **buf, unsigned *len);
     int hbase_mailbox_cache_update_header(struct mailbox *mailbox, unsigned char *buf, int size);
     int hbase_mailbox_cache_append(struct mailbox *mailbox, uint32_t uid, unsigned char *buf, int size);
+    int hbase_mailbox_header_read(struct mailbox *mailbox, unsigned char **buf, int *len);
+    int hbase_mailbox_header_update(struct mailbox *mailbox, unsigned char *buf, int size);
 }
 
 typedef std::vector<std::string> StrVec;
@@ -657,6 +659,61 @@ int hbase_mailbox_cache_append(struct mailbox *mailbox, uint32_t uid, unsigned c
     std::vector<Mutation> mutations;
     mutations.push_back(Mutation());
     mutations.back().column = CF_CACHE + "data";
+    std::string data((char*)buf, size);
+    mutations.back().value = data;
+    dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
+    return 0;
+}
+
+int hbase_mailbox_header_read(struct mailbox *mailbox, unsigned char **buf, int *len)
+{
+    syslog(LOG_DEBUG, "%s", __func__);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+
+    std::string key(mailbox->name);
+    std::vector<TRowResult> rowResult;
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    try {
+        dbengine.client->getRow(rowResult, TABLE, key, dummyAttributes);
+        if (rowResult.size()!=1) return -1;
+
+        std::string &value = rowResult[0].columns.find(CF_HEADER + "data")->second.value;
+        if (buf && len) {
+            *len = value.size();
+            *buf = (unsigned char*)malloc(*len);
+            memcpy(*buf, value.data(), *len);
+        }
+    } catch (const TException &tx) {
+        syslog(LOG_ERR, "DBERROR: %s", tx.what());
+        return -1;
+    }
+    return 0;
+}
+
+int hbase_mailbox_header_update(struct mailbox *mailbox, unsigned char *buf, int size)
+{
+    syslog(LOG_DEBUG, "%s", __func__);
+    syslog(LOG_DEBUG, "index_base: %s", mailbox->index_base);
+    syslog(LOG_DEBUG, "name: %s", mailbox->name);
+    syslog(LOG_DEBUG, "part: %s", mailbox->part);
+    syslog(LOG_DEBUG, "acl: %s", mailbox->acl);
+    syslog(LOG_DEBUG, "uniqueid: %s", mailbox->uniqueid);
+    syslog(LOG_DEBUG, "quotaroot: %s", mailbox->quotaroot);
+    syslog(LOG_DEBUG, "flagname: %s", mailbox->flagname);
+
+    std::string key(mailbox->name);
+    const std::map<Text, Text>  dummyAttributes; // see HBASE-6806 HBASE-4658
+
+    std::vector<Mutation> mutations;
+    mutations.push_back(Mutation());
+    mutations.back().column = CF_HEADER + "data";
     std::string data((char*)buf, size);
     mutations.back().value = data;
     dbengine.client->mutateRow(TABLE, key, mutations, dummyAttributes);
